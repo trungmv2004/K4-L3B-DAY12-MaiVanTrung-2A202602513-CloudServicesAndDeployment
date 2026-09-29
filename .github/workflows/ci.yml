@@ -1,0 +1,117 @@
+# CI/CD — mỗi lần push/PR: chạy test + build image trên máy sạch.
+# Chỉ khi push lên main VÀ cả hai job xanh mới deploy lên Railway.
+#
+# Cần cấu hình trên GitHub (Settings → Secrets and variables → Actions):
+#   Secrets:   RAILWAY_TOKEN  — Project Token của project day12-agent (môi trường production)
+#   Variables: PUBLIC_URL     — (tùy chọn) URL public để smoke test sau deploy
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (CP1–CP4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cài dependency
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # test_cp5 gọi vào bản deploy đang sống, test_bonus_cicd kiểm tra badge
+      # của chính workflow này → không chạy trong CI. Test build Docker (mark
+      # `docker`) để job `build` lo.
+      - name: Chạy pytest
+        env:
+          AGENT_API_KEY: ci-dummy
+          REDIS_URL: "fake://"
+        run: |
+          pytest tests/ -v -m "not docker" \
+            --ignore=tests/test_cp5.py \
+            --ignore=tests/test_bonus_cicd.py
+
+  build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker build
+        run: docker build -t day12-agent:${{ github.sha }} .
+
+      - name: Kiểm tra image (non-root, dưới 500MB, /health chạy được)
+        run: |
+          user=$(docker image inspect day12-agent:${{ github.sha }} --format '{{.Config.User}}')
+          echo "USER=$user"
+          test -n "$user"
+          test "$user" != "root"
+
+          size=$(docker image inspect day12-agent:${{ github.sha }} --format '{{.Size}}')
+          echo "size=$((size / 1024 / 1024)) MB"
+          test "$size" -lt $((500 * 1024 * 1024))
+
+          docker run -d --name smoke -p 8000:8000 \
+            -e AGENT_API_KEY=ci-dummy -e REDIS_URL=fake:// \
+            day12-agent:${{ github.sha }}
+          for i in $(seq 1 15); do
+            curl -fsS http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          docker logs smoke
+          exit 1
+
+  deploy:
+    name: Deploy lên Railway
+    needs: [test, build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Hai lần push liên tiếp không deploy chồng lên nhau
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://agent-production-d2f5.up.railway.app' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cài Railway CLI
+        run: npm install -g @railway/cli@5.63.1
+
+      - name: railway up
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service agent --ci
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS "$PUBLIC_URL/health" && curl -fsS "$PUBLIC_URL/ready"; then
+              echo
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PUBLIC_URL/ask" \
+                -H "Content-Type: application/json" -d '{"question":"ci"}')
+              echo "/ask không có key → $code"
+              test "$code" = "401"
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
