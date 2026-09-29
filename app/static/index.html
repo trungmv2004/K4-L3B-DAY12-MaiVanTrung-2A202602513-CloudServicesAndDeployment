@@ -246,6 +246,40 @@
   }
   .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
 
+  /* ── curl checks ── */
+  .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .seg-btn {
+    border: 0; background: none; padding: 4px 10px; border-radius: 7px;
+    font-size: 12px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0;
+  }
+  .seg-btn.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, .08); }
+  .curl-case { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .curl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .curl-head b { font-size: 13.5px; margin-right: 8px; }
+  .expect { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .curl-actions { display: flex; gap: 6px; }
+  .btn-run {
+    padding: 6px 12px; border-radius: 8px; border: 0; font-size: 12.5px; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .btn-run:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  pre.cmd {
+    margin: 0; padding: 12px 14px; border-radius: 10px; overflow-x: auto;
+    background: #0f1220; color: #d7dbf0; font: 12.5px/1.6 var(--mono);
+  }
+  pre.cmd .c { color: #7f87a8; }
+  pre.cmd .k { color: #a5b4fc; }
+  .curl-result { margin-top: 10px; }
+  .curl-result[hidden] { display: none; }
+  .verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; margin-bottom: 8px; }
+  .verdict .pass { color: var(--ok); font-weight: 600; }
+  .verdict .fail { color: var(--err); font-weight: 600; }
+  .verdict .muted { color: var(--muted); font-family: var(--mono); }
+  pre.body {
+    margin: 0; padding: 10px 12px; border-radius: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+    background: var(--surface-2); border: 1px solid var(--border); font: 12px/1.55 var(--mono);
+  }
+
   /* ── Request log ── */
   .log { max-height: 260px; overflow: auto; margin: 0 -18px -18px; border-top: 1px solid var(--border); }
   .log table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
@@ -386,6 +420,46 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
       </form>
+    </section>
+
+    <section class="card" id="curl-card">
+      <h2>
+        <span>Kiểm tra bằng curl <span style="text-transform:none;letter-spacing:0;font-weight:500">· Lab CP3</span></span>
+        <span class="seg" role="tablist" aria-label="Chọn shell">
+          <button type="button" class="seg-btn active" data-shell="bash" role="tab">Bash</button>
+          <button type="button" class="seg-btn" data-shell="ps" role="tab">PowerShell</button>
+        </span>
+      </h2>
+
+      <div class="curl-case" data-case="nokey">
+        <div class="curl-head">
+          <div><b>Thiếu key</b><span class="expect">mong đợi <span class="code c401">401</span></span></div>
+          <div class="curl-actions">
+            <button type="button" class="btn-ghost" data-copy>Copy</button>
+            <button type="button" class="btn-run" data-run>Chạy ▶</button>
+          </div>
+        </div>
+        <pre class="cmd"><code></code></pre>
+        <div class="curl-result" hidden></div>
+      </div>
+
+      <div class="curl-case" data-case="withkey">
+        <div class="curl-head">
+          <div><b>Có key</b><span class="expect">mong đợi <span class="code c2">200</span></span></div>
+          <div class="curl-actions">
+            <button type="button" class="btn-ghost" data-copy>Copy</button>
+            <button type="button" class="btn-run" data-run>Chạy ▶</button>
+          </div>
+        </div>
+        <pre class="cmd"><code></code></pre>
+        <div class="curl-result" hidden></div>
+      </div>
+
+      <div class="hint">
+        <b>Chạy ▶</b> gửi đúng request này từ trình duyệt (dùng key ở ô Kết nối). Lệnh hiển thị chỉ ghi
+        <code>$AGENT_API_KEY</code>, không bao giờ in key thật. Trên Windows, Git Bash gửi tiếng Việt sai mã hóa
+        → server trả <b>400</b>; dùng tab PowerShell hoặc nút Chạy.
+      </div>
     </section>
 
     <section class="card">
@@ -666,6 +740,129 @@
     toast("/health " + h.status + " · /ready " + r.status + (r.data?.redis ? " · Redis OK" : " · Redis lỗi"));
     btn.disabled = false;
   });
+
+  // ── Kiểm tra bằng curl (Lab CP3) ──
+  const CURL_CASES = {
+    nokey:   { question: "Hello",         auth: false, expect: 401 },
+    withkey: { question: "Docker là gì?", auth: true,  expect: 200 },
+  };
+  const HTTP_TEXT = { 200: "OK", 400: "Bad Request", 401: "Unauthorized", 402: "Payment Required", 422: "Unprocessable Entity", 429: "Too Many Requests" };
+  let shell = store.get("localStorage", "shell") === "ps" ? "ps" : "bash";
+
+  // Lệnh chỉ chứa TÊN biến ($AGENT_API_KEY), không bao giờ chèn key thật
+  function curlCommand(name) {
+    const c = CURL_CASES[name];
+    const url = location.origin + "/ask";
+    const user = (userEl.value.trim() || "sv01").replace(/["'`$\\]/g, "");
+    const json = JSON.stringify({ question: c.question });
+    if (shell === "bash") {
+      const lines = [];
+      if (c.auth) lines.push("# export AGENT_API_KEY=<key của bạn>");
+      lines.push(`curl -i -X POST ${url} \\`, `  -H "Content-Type: application/json" \\`);
+      if (c.auth) lines.push(`  -H "X-API-Key: $AGENT_API_KEY" \\`, `  -H "X-User-Id: ${user}" \\`);
+      lines.push(`  -d '${json}'`);
+      return lines.join("\n");
+    }
+    if (!c.auth) {
+      return `curl.exe -i -X POST ${url} -H "Content-Type: application/json" -d '${json.replace(/"/g, '\\"')}'`;
+    }
+    // PowerShell 5.1: gửi body dạng byte UTF-8 để tiếng Việt không bị hỏng
+    return [
+      "# $env:AGENT_API_KEY = '<key của bạn>'",
+      `$body = [Text.Encoding]::UTF8.GetBytes('${json}')`,
+      `$r = Invoke-WebRequest ${url} -Method Post -UseBasicParsing \``,
+      "  -ContentType 'application/json; charset=utf-8' `",
+      `  -Headers @{ 'X-API-Key' = $env:AGENT_API_KEY; 'X-User-Id' = '${user}' } -Body $body`,
+      "$r.StatusCode",
+      "[Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())",
+    ].join("\n");
+  }
+
+  function renderCurl() {
+    document.querySelectorAll(".seg-btn").forEach((b) => {
+      const on = b.dataset.shell === shell;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on);
+    });
+    document.querySelectorAll(".curl-case").forEach((box) => {
+      const code = box.querySelector("pre.cmd code");
+      code.replaceChildren();
+      curlCommand(box.dataset.case).split("\n").forEach((line, i) => {
+        if (i) code.append("\n");
+        const span = document.createElement("span");
+        if (line.trimStart().startsWith("#")) span.className = "c";
+        else if (/^(curl|curl\.exe|\$r = Invoke-WebRequest|\$body)/.test(line)) span.className = "k";
+        span.textContent = line;
+        code.append(span);
+      });
+    });
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch {
+      const ta = Object.assign(document.createElement("textarea"), { value: text });
+      document.body.append(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { /* không copy được */ }
+      ta.remove();
+      return ok;
+    }
+  }
+
+  function showCurlResult(box, res, expect) {
+    const out = box.querySelector(".curl-result");
+    const verdict = document.createElement("div");
+    verdict.className = "verdict";
+    verdict.append(codeTag(res.status));
+    const txt = document.createElement("span");
+    txt.className = "muted";
+    txt.textContent = res.status ? `HTTP ${res.status} ${HTTP_TEXT[res.status] || ""} · ${res.ms} ms` : "Không kết nối được server";
+    const ok = document.createElement("span");
+    ok.className = res.status === expect ? "pass" : "fail";
+    ok.textContent = res.status === expect ? "✓ Đúng mong đợi" : `✗ Mong đợi ${expect}`;
+    verdict.append(txt, ok);
+    const body = document.createElement("pre");
+    body.className = "body";
+    body.textContent = res.data ? JSON.stringify(res.data, null, 2) : "(không có body)";
+    out.replaceChildren(verdict, body);
+    out.hidden = false;
+  }
+
+  $("#curl-card").addEventListener("click", async (e) => {
+    const seg = e.target.closest(".seg-btn");
+    if (seg) {
+      shell = seg.dataset.shell;
+      store.set("localStorage", "shell", shell);
+      renderCurl();
+      return;
+    }
+    const box = e.target.closest(".curl-case");
+    if (!box) return;
+    const c = CURL_CASES[box.dataset.case];
+
+    if (e.target.closest("[data-copy]")) {
+      toast((await copyText(curlCommand(box.dataset.case))) ? "Đã copy lệnh" : "Không copy được — hãy bôi đen và copy tay");
+      return;
+    }
+    const runBtn = e.target.closest("[data-run]");
+    if (runBtn) {
+      if (c.auth && !keyEl.value.trim()) {
+        toast("Nhập API key ở ô Kết nối trước khi chạy");
+        keyEl.focus();
+        return;
+      }
+      runBtn.disabled = true;
+      const res = await call("POST", "/ask", { body: { question: c.question }, auth: c.auth });
+      if (c.auth) handleAsk(res);
+      showCurlResult(box, res, c.expect);
+      renderStats();
+      runBtn.disabled = false;
+    }
+  });
+  userEl.addEventListener("input", renderCurl);
+  $("#new-user").addEventListener("click", renderCurl);
+  renderCurl();
 
   // ── Toast ──
   let toastTimer;
