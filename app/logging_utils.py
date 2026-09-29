@@ -34,4 +34,14 @@ def log_event(event: str, level: str = "info", **fields) -> str:
         >>> log_event("ask_completed", user_id="sv01", cost_usd=0.0001)
         '{"event": "ask_completed", "level": "info", "timestamp": "...", ...}'
     """
-    raise NotImplementedError("TODO (CP1): cài đặt log_event")
+    record = {"event": event, "level": level.lower(), "timestamp": utc_now_iso()}
+    record.update(fields)
+    # default=str: giá trị lạ (datetime, UUID...) không làm vỡ dòng log
+    line = json.dumps(record, ensure_ascii=False, default=str)
+    try:
+        print(line, file=sys.stdout, flush=True)
+    except UnicodeEncodeError:
+        # Console không phải UTF-8 (vd. cp1252 trên Windows): escape ký tự
+        # thay vì để một dòng log làm sập request. Vẫn là JSON hợp lệ.
+        print(json.dumps(record, ensure_ascii=True, default=str), file=sys.stdout, flush=True)
+    return line
